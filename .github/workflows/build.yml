@@ -620,7 +620,7 @@ jobs:
 
               private fun openBatterySettings() {
                   try {
-                      startActivity(Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATIONS_SETTINGS))
+                      startActivity(Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS))
                   } catch (e: ActivityNotFoundException) {
                       startActivity(Intent(Settings.ACTION_SETTINGS))
                   }

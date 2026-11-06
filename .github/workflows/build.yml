@@ -1,1 +1,1340 @@
-1name: Build APK (jedan fajl)23on:4  push:5    branches: [ main, master ]6  workflow_dispatch:78jobs:9  build:10    runs-on: ubuntu-latest11    steps:12      - uses: actions/setup-java@v413        with:14          distribution: temurin15          java-version: '17'1617      - uses: gradle/actions/setup-gradle@v418        with:19          gradle-version: '8.7'2021      - name: Create project files22        run: |23          cat > 'build.gradle.kts' <<'EOF_392475FD'24          plugins {25              id("com.android.application") version "8.5.2" apply false26              id("org.jetbrains.kotlin.android") version "1.9.24" apply false27          }28          EOF_392475FD29          cat > 'gradle.properties' <<'EOF_503F218D'30          org.gradle.jvmargs=-Xmx3g -Dfile.encoding=UTF-831          android.nonTransitiveRClass=true32          kotlin.code.style=official33          EOF_503F218D34          cat > 'settings.gradle.kts' <<'EOF_70BC3E90'35          pluginManagement {36              repositories {37                  google()38                  mavenCentral()39                  gradlePluginPortal()
+name: Build APK (jedan fajl)
+
+on:
+  push:
+    branches: [ main, master ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.7'
+
+      - name: Create project files
+        run: |
+          cat > 'build.gradle.kts' <<'EOF_392475FD'
+          plugins {
+              id("com.android.application") version "8.5.2" apply false
+              id("org.jetbrains.kotlin.android") version "1.9.24" apply false
+          }
+          EOF_392475FD
+          cat > 'gradle.properties' <<'EOF_503F218D'
+          org.gradle.jvmargs=-Xmx3g -Dfile.encoding=UTF-8
+          android.nonTransitiveRClass=true
+          kotlin.code.style=official
+          EOF_503F218D
+          cat > 'settings.gradle.kts' <<'EOF_70BC3E90'
+          pluginManagement {
+              repositories {
+                  google()
+                  mavenCentral()
+                  gradlePluginPortal()
+              }
+          }
+          dependencyResolutionManagement {
+              repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS)
+              repositories {
+                  google()
+                  mavenCentral()
+              }
+          }
+          rootProject.name = "BookReader"
+          include(":app")
+          EOF_70BC3E90
+          mkdir -p 'app'
+          cat > 'app/build.gradle.kts' <<'EOF_863E98CB'
+          plugins {
+              id("com.android.application")
+              id("org.jetbrains.kotlin.android")
+          }
+
+          android {
+              namespace = "com.example.bookreader"
+              compileSdk = 34
+
+              defaultConfig {
+                  applicationId = "com.example.bookreader"
+                  minSdk = 29
+                  targetSdk = 34
+                  versionCode = 1
+                  versionName = "1.0"
+              }
+
+              buildTypes {
+                  release {
+                      isMinifyEnabled = false
+                  }
+              }
+
+              compileOptions {
+                  sourceCompatibility = JavaVersion.VERSION_17
+                  targetCompatibility = JavaVersion.VERSION_17
+              }
+
+              kotlinOptions {
+                  jvmTarget = "17"
+              }
+
+              packaging {
+                  resources {
+                      excludes += "/META-INF/{AL2.0,LGPL2.1}"
+                  }
+              }
+          }
+
+          dependencies {
+              implementation("com.tom-roush:pdfbox-android:2.0.27.0")
+              implementation("org.jsoup:jsoup:1.17.2")
+          }
+          EOF_863E98CB
+          mkdir -p 'app/src/main'
+          cat > 'app/src/main/AndroidManifest.xml' <<'EOF_C8CC2DD4'
+          <?xml version="1.0" encoding="utf-8"?>
+          <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+              <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+              <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK" />
+              <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+              <uses-permission android:name="android.permission.WAKE_LOCK" />
+
+              <queries>
+                  <intent>
+                      <action android:name="android.intent.action.TTS_SERVICE" />
+                  </intent>
+              </queries>
+
+              <application
+                  android:allowBackup="true"
+                  android:icon="@drawable/ic_launcher"
+                  android:label="@string/app_name"
+                  android:theme="@android:style/Theme.DeviceDefault.DayNight">
+
+                  <activity
+                      android:name=".MainActivity"
+                      android:exported="true"
+                      android:launchMode="singleTop"
+                      android:configChanges="orientation|screenSize|keyboardHidden">
+                      <intent-filter>
+                          <action android:name="android.intent.action.MAIN" />
+                          <category android:name="android.intent.category.LAUNCHER" />
+                      </intent-filter>
+                      <intent-filter>
+                          <action android:name="android.intent.action.VIEW" />
+                          <category android:name="android.intent.category.DEFAULT" />
+                          <data android:scheme="content" />
+                          <data android:mimeType="application/pdf" />
+                          <data android:mimeType="application/epub+zip" />
+                          <data android:mimeType="text/plain" />
+                      </intent-filter>
+                  </activity>
+
+                  <service
+                      android:name=".ReaderService"
+                      android:exported="false"
+                      android:foregroundServiceType="mediaPlayback" />
+              </application>
+          </manifest>
+          EOF_C8CC2DD4
+          mkdir -p 'app/src/main/java/com/example/bookreader'
+          cat > 'app/src/main/java/com/example/bookreader/BookLoader.kt' <<'EOF_4299A51A'
+          package com.example.bookreader
+
+          import android.content.Context
+          import android.net.Uri
+          import android.provider.OpenableColumns
+          import com.tom_roush.pdfbox.android.PDFBoxResourceLoader
+          import com.tom_roush.pdfbox.pdmodel.PDDocument
+          import com.tom_roush.pdfbox.text.PDFTextStripper
+          import org.jsoup.Jsoup
+          import org.jsoup.parser.Parser
+          import java.io.BufferedInputStream
+          import java.io.ByteArrayInputStream
+          import java.io.IOException
+          import java.nio.ByteBuffer
+          import java.nio.charset.CharacterCodingException
+          import java.nio.charset.Charset
+          import java.nio.charset.CodingErrorAction
+          import java.util.zip.ZipInputStream
+
+          object BookLoader {
+
+              class Book(val title: String, val text: String)
+
+              fun load(ctx: Context, uri: Uri): Book {
+                  val name = displayName(ctx, uri)
+                  val mime = ctx.contentResolver.getType(uri) ?: ""
+                  val lower = name.lowercase()
+                  val text = when {
+                      lower.endsWith(".pdf") || mime == "application/pdf" -> readPdf(ctx, uri)
+                      lower.endsWith(".epub") || mime == "application/epub+zip" -> readEpub(ctx, uri)
+                      else -> readTxt(ctx, uri)
+                  }
+                  return Book(name.substringBeforeLast('.', name), text)
+              }
+
+              private fun displayName(ctx: Context, uri: Uri): String {
+                  try {
+                      ctx.contentResolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)?.use { c ->
+                          if (c.moveToFirst()) {
+                              val i = c.getColumnIndex(OpenableColumns.DISPLAY_NAME)
+                              if (i >= 0) {
+                                  val n = c.getString(i)
+                                  if (!n.isNullOrEmpty()) return n
+                              }
+                          }
+                      }
+                  } catch (e: Exception) {
+                      // ignorisemo
+                  }
+                  return uri.lastPathSegment ?: "knjiga"
+              }
+
+              private fun open(ctx: Context, uri: Uri) =
+                  ctx.contentResolver.openInputStream(uri) ?: throw IOException("Ne mogu da otvorim fajl")
+
+              // ---------- TXT ----------
+
+              private fun readTxt(ctx: Context, uri: Uri): String {
+                  val bytes = open(ctx, uri).use { it.readBytes() }
+                  return decode(bytes)
+              }
+
+              private fun decode(bytes: ByteArray): String {
+                  if (bytes.size >= 2) {
+                      val b0 = bytes[0].toInt() and 0xFF
+                      val b1 = bytes[1].toInt() and 0xFF
+                      if (b0 == 0xFF && b1 == 0xFE) return String(bytes, Charsets.UTF_16LE).removePrefix("﻿")
+                      if (b0 == 0xFE && b1 == 0xFF) return String(bytes, Charsets.UTF_16BE).removePrefix("﻿")
+                  }
+                  val dec = Charsets.UTF_8.newDecoder()
+                      .onMalformedInput(CodingErrorAction.REPORT)
+                      .onUnmappableCharacter(CodingErrorAction.REPORT)
+                  return try {
+                      dec.decode(ByteBuffer.wrap(bytes)).toString().removePrefix("﻿")
+                  } catch (e: CharacterCodingException) {
+                      // stari srpski/hrvatski txt fajlovi su često u Windows-1250
+                      String(bytes, Charset.forName("windows-1250"))
+                  }
+              }
+
+              // ---------- PDF ----------
+
+              private fun readPdf(ctx: Context, uri: Uri): String {
+                  PDFBoxResourceLoader.init(ctx.applicationContext)
+                  return open(ctx, uri).use { ins ->
+                      PDDocument.load(ins).use { doc ->
+                          val stripper = PDFTextStripper()
+                          val sb = StringBuilder()
+                          val n = doc.numberOfPages
+                          for (p in 1..n) {
+                              stripper.startPage = p
+                              stripper.endPage = p
+                              sb.append(stripper.getText(doc)).append("\n\n")
+                          }
+                          sb.toString()
+                      }
+                  }
+              }
+
+              // ---------- EPUB ----------
+
+              private fun readEpub(ctx: Context, uri: Uri): String {
+                  val files = HashMap<String, ByteArray>()
+                  ZipInputStream(BufferedInputStream(open(ctx, uri))).use { zin ->
+                      var e = zin.nextEntry
+                      while (e != null) {
+                          val ln = e.name.lowercase()
+                          if (!e.isDirectory && (ln.endsWith(".xhtml") || ln.endsWith(".html") || ln.endsWith(".htm") ||
+                                      ln.endsWith(".opf") || ln.endsWith(".xml") || ln.endsWith(".ncx"))
+                          ) {
+                              files[e.name] = zin.readBytes()
+                          }
+                          e = zin.nextEntry
+                      }
+                  }
+
+                  val container = files["META-INF/container.xml"] ?: throw IOException("Nije ispravan EPUB fajl")
+                  val cdoc = Jsoup.parse(String(container, Charsets.UTF_8), "", Parser.xmlParser())
+                  val opfPath = cdoc.selectFirst("rootfile")?.attr("full-path")
+                  if (opfPath.isNullOrEmpty()) throw IOException("Nije ispravan EPUB fajl")
+                  val opf = files[opfPath] ?: throw IOException("Nije ispravan EPUB fajl")
+                  val odoc = Jsoup.parse(String(opf, Charsets.UTF_8), "", Parser.xmlParser())
+                  val base = if (opfPath.contains('/')) opfPath.substringBeforeLast('/') + "/" else ""
+
+                  val manifest = HashMap<String, String>()
+                  for (item in odoc.select("item")) {
+                      manifest[item.attr("id")] = item.attr("href")
+                  }
+
+                  val sb = StringBuilder()
+                  for (ref in odoc.select("itemref")) {
+                      val href = manifest[ref.attr("idref")] ?: continue
+                      val path = resolve(base, Uri.decode(href.substringBefore('#')))
+                      val bytes = files[path] ?: continue
+                      val html = Jsoup.parse(ByteArrayInputStream(bytes), "UTF-8", "")
+                      val els = html.select("h1, h2, h3, h4, h5, h6, p, li")
+                      if (els.isEmpty()) {
+                          sb.append(html.body().text())
+                      } else {
+                          for (el in els) {
+                              val t = el.text().trim()
+                              if (t.isNotEmpty()) sb.append(t).append("\n\n")
+                          }
+                      }
+                      sb.append("\n\n")
+                  }
+                  return sb.toString()
+              }
+
+              private fun resolve(base: String, rel: String): String {
+                  val parts = ArrayList<String>()
+                  for (p in (base + rel).split('/')) {
+                      if (p.isEmpty() || p == ".") continue
+                      if (p == "..") {
+                          if (parts.isNotEmpty()) parts.removeAt(parts.size - 1)
+                      } else {
+                          parts.add(p)
+                      }
+                  }
+                  return parts.joinToString("/")
+              }
+          }
+          EOF_4299A51A
+          mkdir -p 'app/src/main/java/com/example/bookreader'
+          cat > 'app/src/main/java/com/example/bookreader/MainActivity.kt' <<'EOF_904BD646'
+          package com.example.bookreader
+
+          import android.Manifest
+          import android.app.Activity
+          import android.content.ActivityNotFoundException
+          import android.content.Intent
+          import android.content.pm.PackageManager
+          import android.graphics.Typeface
+          import android.net.Uri
+          import android.os.Build
+          import android.os.Bundle
+          import android.provider.Settings
+          import android.view.View
+          import android.view.ViewGroup
+          import android.widget.AdapterView
+          import android.widget.ArrayAdapter
+          import android.widget.Button
+          import android.widget.LinearLayout
+          import android.widget.ScrollView
+          import android.widget.SeekBar
+          import android.widget.Spinner
+          import android.widget.TextView
+          import android.widget.Toast
+          import java.io.IOException
+          import java.util.Locale
+          import kotlin.math.roundToInt
+
+          class MainActivity : Activity() {
+
+              private val REQ_OPEN = 11
+              private val REQ_NOTIF = 12
+
+              private val prefs by lazy { getSharedPreferences("reader", MODE_PRIVATE) }
+
+              private lateinit var titleView: TextView
+              private lateinit var statusView: TextView
+              private lateinit var textView: TextView
+              private lateinit var seek: SeekBar
+              private lateinit var playBtn: Button
+              private lateinit var rateLabel: TextView
+              private lateinit var rateSeek: SeekBar
+              private lateinit var langSpinner: Spinner
+
+              private var userSeeking = false
+              private val listener: () -> Unit = { refresh() }
+
+              private val langValues = listOf("auto", "en", "sr", "hr")
+              private val langNames = listOf("Automatski", "English", "Srpski", "Srpski (hrvatski glas)")
+
+              override fun onCreate(savedInstanceState: Bundle?) {
+                  super.onCreate(savedInstanceState)
+                  ReaderState.rate = prefs.getFloat("rate", 1.0f)
+                  ReaderState.langMode = prefs.getString("lang", "auto") ?: "auto"
+                  buildUi()
+                  val handled = handleIntent(intent)
+                  if (!handled && ReaderState.chunks.isEmpty()) {
+                      val last = prefs.getString("last_uri", null)
+                      if (last != null) openUri(Uri.parse(last))
+                  }
+              }
+
+              override fun onNewIntent(intent: Intent?) {
+                  super.onNewIntent(intent)
+                  if (intent != null) setIntent(intent)
+                  handleIntent(intent)
+              }
+
+              override fun onStart() {
+                  super.onStart()
+                  ReaderState.addListener(listener)
+                  refresh()
+              }
+
+              override fun onStop() {
+                  ReaderState.removeListener(listener)
+                  super.onStop()
+              }
+
+              private fun handleIntent(i: Intent?): Boolean {
+                  val data = i?.data
+                  if (i?.action == Intent.ACTION_VIEW && data != null) {
+                      openUri(data)
+                      return true
+                  }
+                  return false
+              }
+
+              // ---------- UI ----------
+
+              private fun buildUi() {
+                  val d = resources.displayMetrics.density
+                  val pad = (16 * d).toInt()
+                  val match = ViewGroup.LayoutParams.MATCH_PARENT
+                  val wrap = ViewGroup.LayoutParams.WRAP_CONTENT
+
+                  val root = LinearLayout(this)
+                  root.orientation = LinearLayout.VERTICAL
+                  root.setPadding(pad, pad, pad, pad)
+
+                  titleView = TextView(this)
+                  titleView.textSize = 20f
+                  titleView.setTypeface(null, Typeface.BOLD)
+                  root.addView(titleView, LinearLayout.LayoutParams(match, wrap))
+
+                  val openBtn = Button(this)
+                  openBtn.text = "Otvori knjigu (PDF / TXT / EPUB)"
+                  openBtn.setOnClickListener { pickFile() }
+                  root.addView(openBtn, LinearLayout.LayoutParams(match, wrap))
+
+                  statusView = TextView(this)
+                  statusView.textSize = 14f
+                  root.addView(statusView, LinearLayout.LayoutParams(match, wrap))
+
+                  textView = TextView(this)
+                  textView.textSize = 18f
+                  textView.setLineSpacing(0f, 1.2f)
+                  textView.setTextIsSelectable(true)
+                  val scroll = ScrollView(this)
+                  scroll.addView(textView)
+                  root.addView(scroll, LinearLayout.LayoutParams(match, 0, 1f))
+
+                  seek = SeekBar(this)
+                  seek.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+                      override fun onProgressChanged(sb: SeekBar?, progress: Int, fromUser: Boolean) {
+                          if (fromUser) statusView.text = "Deo ${progress + 1} / ${ReaderState.chunks.size}"
+                      }
+
+                      override fun onStartTrackingTouch(sb: SeekBar?) {
+                          userSeeking = true
+                      }
+
+                      override fun onStopTrackingTouch(sb: SeekBar?) {
+                          userSeeking = false
+                          jump(sb?.progress ?: 0)
+                      }
+                  })
+                  root.addView(seek, LinearLayout.LayoutParams(match, wrap))
+
+                  val row = LinearLayout(this)
+                  row.orientation = LinearLayout.HORIZONTAL
+                  val prev = Button(this)
+                  prev.text = "« Nazad"
+                  prev.setOnClickListener { jump(ReaderState.index - 1) }
+                  playBtn = Button(this)
+                  playBtn.text = "Pusti"
+                  playBtn.setOnClickListener { togglePlay() }
+                  val next = Button(this)
+                  next.text = "Napred »"
+                  next.setOnClickListener { jump(ReaderState.index + 1) }
+                  row.addView(prev, LinearLayout.LayoutParams(0, wrap, 1f))
+                  row.addView(playBtn, LinearLayout.LayoutParams(0, wrap, 1.3f))
+                  row.addView(next, LinearLayout.LayoutParams(0, wrap, 1f))
+                  root.addView(row, LinearLayout.LayoutParams(match, wrap))
+
+                  rateLabel = TextView(this)
+                  root.addView(rateLabel, LinearLayout.LayoutParams(match, wrap))
+                  rateSeek = SeekBar(this)
+                  rateSeek.max = 15
+                  rateSeek.progress = ((ReaderState.rate - 0.5f) * 10f).roundToInt().coerceIn(0, 15)
+                  updateRateLabel()
+                  rateSeek.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+                      override fun onProgressChanged(sb: SeekBar?, progress: Int, fromUser: Boolean) {
+                          ReaderState.rate = 0.5f + progress * 0.1f
+                          updateRateLabel()
+                      }
+
+                      override fun onStartTrackingTouch(sb: SeekBar?) {}
+
+                      override fun onStopTrackingTouch(sb: SeekBar?) {
+                          prefs.edit().putFloat("rate", ReaderState.rate).apply()
+                          if (ReaderState.playing) cmd(ReaderService.ACTION_APPLY)
+                      }
+                  })
+                  root.addView(rateSeek, LinearLayout.LayoutParams(match, wrap))
+
+                  langSpinner = Spinner(this)
+                  langSpinner.adapter = ArrayAdapter(this, android.R.layout.simple_spinner_dropdown_item, langNames)
+                  langSpinner.setSelection(langValues.indexOf(ReaderState.langMode).coerceAtLeast(0), false)
+                  langSpinner.onItemSelectedListener = object : AdapterView.OnItemSelectedListener {
+                      override fun onItemSelected(parent: AdapterView<*>?, view: View?, position: Int, id: Long) {
+                          val v = langValues[position]
+                          if (v != ReaderState.langMode) {
+                              ReaderState.langMode = v
+                              prefs.edit().putString("lang", v).apply()
+                              if (ReaderState.playing) cmd(ReaderService.ACTION_APPLY)
+                          }
+                      }
+
+                      override fun onNothingSelected(parent: AdapterView<*>?) {}
+                  }
+                  root.addView(langSpinner, LinearLayout.LayoutParams(match, wrap))
+
+                  val row2 = LinearLayout(this)
+                  row2.orientation = LinearLayout.HORIZONTAL
+                  val voices = Button(this)
+                  voices.text = "Glasovi"
+                  voices.setOnClickListener { openVoiceSettings() }
+                  val battery = Button(this)
+                  battery.text = "Baterija"
+                  battery.setOnClickListener { openBatterySettings() }
+                  row2.addView(voices, LinearLayout.LayoutParams(0, wrap, 1f))
+                  row2.addView(battery, LinearLayout.LayoutParams(0, wrap, 1f))
+                  root.addView(row2, LinearLayout.LayoutParams(match, wrap))
+
+                  setContentView(root)
+              }
+
+              private fun updateRateLabel() {
+                  rateLabel.text = String.format(Locale.US, "Brzina čitanja: %.1fx", ReaderState.rate)
+              }
+
+              private fun refresh() {
+                  val n = ReaderState.chunks.size
+                  titleView.text = if (ReaderState.title.isEmpty()) "Čitač knjiga" else ReaderState.title
+                  if (n == 0) {
+                      statusView.text = ReaderState.error ?: "Otvori knjigu da počneš."
+                      textView.text = ""
+                      seek.max = 0
+                      playBtn.text = "Pusti"
+                      return
+                  }
+                  val i = ReaderState.index.coerceIn(0, n - 1)
+                  textView.text = ReaderState.chunks[i]
+                  if (!userSeeking) {
+                      seek.max = n - 1
+                      seek.progress = i
+                  }
+                  var s = "Deo ${i + 1} / $n"
+                  if (ReaderState.voiceInfo.isNotEmpty()) s += "  •  " + ReaderState.voiceInfo
+                  val err = ReaderState.error
+                  if (err != null) s += "\n" + err
+                  statusView.text = s
+                  playBtn.text = if (ReaderState.playing) "Pauza" else "Pusti"
+              }
+
+              // ---------- akcije ----------
+
+              private fun cmd(action: String, index: Int = -1) {
+                  val i = Intent(this, ReaderService::class.java).setAction(action)
+                  if (index >= 0) i.putExtra(ReaderService.EXTRA_INDEX, index)
+                  if (action == ReaderService.ACTION_PLAY) startForegroundService(i) else startService(i)
+              }
+
+              private fun togglePlay() {
+                  if (ReaderState.chunks.isEmpty()) {
+                      Toast.makeText(this, "Prvo otvori knjigu", Toast.LENGTH_SHORT).show()
+                      return
+                  }
+                  if (ReaderState.playing) {
+                      cmd(ReaderService.ACTION_PAUSE)
+                  } else {
+                      askNotificationPermission()
+                      ReaderState.error = null
+                      cmd(ReaderService.ACTION_PLAY)
+                  }
+              }
+
+              private fun jump(newIndex: Int) {
+                  val n = ReaderState.chunks.size
+                  if (n == 0) return
+                  val i = newIndex.coerceIn(0, n - 1)
+                  if (ReaderState.playing) {
+                      cmd(ReaderService.ACTION_SEEK, i)
+                  } else {
+                      ReaderState.index = i
+                      ReaderState.savePos(this)
+                      refresh()
+                  }
+              }
+
+              private fun askNotificationPermission() {
+                  if (Build.VERSION.SDK_INT >= 33 &&
+                      checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
+                  ) {
+                      requestPermissions(arrayOf(Manifest.permission.POST_NOTIFICATIONS), REQ_NOTIF)
+                  }
+              }
+
+              private fun pickFile() {
+                  val i = Intent(Intent.ACTION_OPEN_DOCUMENT)
+                  i.addCategory(Intent.CATEGORY_OPENABLE)
+                  i.type = "*/*"
+                  i.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION)
+                  startActivityForResult(i, REQ_OPEN)
+              }
+
+              @Deprecated("Deprecated in Java")
+              override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
+                  super.onActivityResult(requestCode, resultCode, data)
+                  if (requestCode == REQ_OPEN && resultCode == RESULT_OK) {
+                      val uri = data?.data ?: return
+                      try {
+                          contentResolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                      } catch (e: Exception) {
+                          // nije kritično
+                      }
+                      openUri(uri)
+                  }
+              }
+
+              private fun openVoiceSettings() {
+                  try {
+                      startActivity(Intent("com.android.settings.TTS_SETTINGS"))
+                  } catch (e: ActivityNotFoundException) {
+                      startActivity(Intent(Settings.ACTION_SETTINGS))
+                  }
+              }
+
+              private fun openBatterySettings() {
+                  try {
+                      startActivity(Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATIONS_SETTINGS))
+                  } catch (e: ActivityNotFoundException) {
+                      startActivity(Intent(Settings.ACTION_SETTINGS))
+                  }
+              }
+
+              private fun openUri(uri: Uri) {
+                  if (ReaderState.playing) cmd(ReaderService.ACTION_PAUSE)
+                  statusView.text = "Učitavam…"
+                  Thread {
+                      try {
+                          val book = BookLoader.load(applicationContext, uri)
+                          val cleaned = TextUtil.clean(book.text)
+                          if (cleaned.length < 20) {
+                              throw IOException("U fajlu nema teksta (možda je skeniran PDF bez prepoznatog teksta).")
+                          }
+                          val chunks = TextUtil.chunk(cleaned)
+                          if (chunks.isEmpty()) throw IOException("U fajlu nema teksta.")
+                          val detected = TextUtil.detectLang(cleaned)
+                          val key = uri.toString().hashCode().toString()
+                          val pos = prefs.getInt("pos_$key", 0).coerceIn(0, chunks.size - 1)
+                          runOnUiThread {
+                              ReaderState.chunks = chunks
+                              ReaderState.index = pos
+                              ReaderState.title = book.title
+                              ReaderState.docKey = key
+                              ReaderState.detected = detected
+                              ReaderState.error = null
+                              prefs.edit().putString("last_uri", uri.toString()).apply()
+                              refresh()
+                          }
+                      } catch (e: Throwable) {
+                          val msg = e.message ?: e.javaClass.simpleName
+                          runOnUiThread { statusView.text = "Greška: $msg" }
+                      }
+                  }.start()
+              }
+          }
+          EOF_904BD646
+          mkdir -p 'app/src/main/java/com/example/bookreader'
+          cat > 'app/src/main/java/com/example/bookreader/ReaderService.kt' <<'EOF_9E0C0C5F'
+          package com.example.bookreader
+
+          import android.app.Notification
+          import android.app.NotificationChannel
+          import android.app.NotificationManager
+          import android.app.PendingIntent
+          import android.app.Service
+          import android.content.Intent
+          import android.content.pm.ServiceInfo
+          import android.graphics.drawable.Icon
+          import android.media.AudioAttributes
+          import android.media.AudioFocusRequest
+          import android.media.AudioManager
+          import android.media.MediaMetadata
+          import android.media.session.MediaSession
+          import android.media.session.PlaybackState
+          import android.os.Handler
+          import android.os.IBinder
+          import android.os.Looper
+          import android.os.PowerManager
+          import android.speech.tts.TextToSpeech
+          import android.speech.tts.UtteranceProgressListener
+          import java.util.Locale
+
+          /**
+           * Foreground servis koji čita tekst preko Android TTS-a.
+           * Radi i kada je ekran zaključan (wake lock + foreground notifikacija + media session).
+           */
+          class ReaderService : Service(), TextToSpeech.OnInitListener {
+
+              companion object {
+                  const val ACTION_PLAY = "com.example.bookreader.PLAY"
+                  const val ACTION_PAUSE = "com.example.bookreader.PAUSE"
+                  const val ACTION_NEXT = "com.example.bookreader.NEXT"
+                  const val ACTION_PREV = "com.example.bookreader.PREV"
+                  const val ACTION_STOP = "com.example.bookreader.STOP"
+                  const val ACTION_SEEK = "com.example.bookreader.SEEK"
+                  const val ACTION_APPLY = "com.example.bookreader.APPLY"
+                  const val EXTRA_INDEX = "index"
+                  private const val CHANNEL = "reading"
+                  private const val NOTIF_ID = 1
+              }
+
+              private val main = Handler(Looper.getMainLooper())
+              private var tts: TextToSpeech? = null
+              private var ttsReady = false
+              private var wantPlay = false
+              private var gen = 0
+              private var errCount = 0
+              private var lastLang = ""
+              private var translit = false
+              private var session: MediaSession? = null
+              private var wakeLock: PowerManager.WakeLock? = null
+              private var focusRequest: AudioFocusRequest? = null
+              private var resumeOnFocus = false
+              private var isForeground = false
+
+              override fun onBind(intent: Intent?): IBinder? = null
+
+              override fun onCreate() {
+                  super.onCreate()
+                  createChannel()
+                  val s = MediaSession(this, "BookReader")
+                  s.setCallback(object : MediaSession.Callback() {
+                      override fun onPlay() {
+                          play()
+                      }
+
+                      override fun onPause() {
+                          pause()
+                      }
+
+                      override fun onSkipToNext() {
+                          seekTo(ReaderState.index + 1)
+                      }
+
+                      override fun onSkipToPrevious() {
+                          seekTo(ReaderState.index - 1)
+                      }
+
+                      override fun onStop() {
+                          stopAll()
+                      }
+                  })
+                  s.isActive = true
+                  session = s
+                  tts = TextToSpeech(applicationContext, this)
+              }
+
+              override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+                  when (intent?.action) {
+                      ACTION_PLAY -> {
+                          goForeground()
+                          play()
+                      }
+                      ACTION_PAUSE -> pause()
+                      ACTION_NEXT -> seekTo(ReaderState.index + 1)
+                      ACTION_PREV -> seekTo(ReaderState.index - 1)
+                      ACTION_SEEK -> seekTo(intent?.getIntExtra(EXTRA_INDEX, 0) ?: 0)
+                      ACTION_APPLY -> {
+                          if (wantPlay && ttsReady) speakCurrent()
+                      }
+                      ACTION_STOP -> stopAll()
+                      else -> {}
+                  }
+                  if (!isForeground) stopSelf()
+                  return START_NOT_STICKY
+              }
+
+              override fun onDestroy() {
+                  wantPlay = false
+                  ReaderState.playing = false
+                  ReaderState.savePos(this)
+                  tts?.stop()
+                  tts?.shutdown()
+                  tts = null
+                  releaseWake()
+                  abandonFocus()
+                  session?.release()
+                  session = null
+                  ReaderState.changed()
+                  super.onDestroy()
+              }
+
+              // ---------- TTS ----------
+
+              override fun onInit(status: Int) {
+                  if (status != TextToSpeech.SUCCESS) {
+                      ttsReady = false
+                      ReaderState.error = "Android TTS nije dostupan. Proveri Podešavanja → Opšte upravljanje → Tekst u govor."
+                      ReaderState.playing = false
+                      wantPlay = false
+                      ReaderState.changed()
+                      if (isForeground) stopAll()
+                      return
+                  }
+                  ttsReady = true
+                  tts?.setAudioAttributes(
+                      AudioAttributes.Builder()
+                          .setUsage(AudioAttributes.USAGE_MEDIA)
+                          .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
+                          .build()
+                  )
+                  tts?.setOnUtteranceProgressListener(object : UtteranceProgressListener() {
+                      override fun onStart(utteranceId: String?) {}
+
+                      override fun onDone(utteranceId: String?) {
+                          onUtteranceEnd(utteranceId, false)
+                      }
+
+                      @Deprecated("Deprecated in Java")
+                      override fun onError(utteranceId: String?) {
+                          onUtteranceEnd(utteranceId, true)
+                      }
+
+                      override fun onError(utteranceId: String?, errorCode: Int) {
+                          onUtteranceEnd(utteranceId, true)
+                      }
+                  })
+                  if (wantPlay) main.post { speakCurrent() }
+              }
+
+              private fun onUtteranceEnd(id: String?, error: Boolean) {
+                  main.post {
+                      if (id == null || !wantPlay) return@post
+                      val parts = id.split(":")
+                      if (parts.size != 2) return@post
+                      if (parts[0].toIntOrNull() != gen) return@post
+                      val idx = parts[1].toIntOrNull() ?: return@post
+                      if (idx != ReaderState.index) return@post
+
+                      if (error) {
+                          errCount++
+                          if (errCount >= 3) {
+                              failPlayback("Greška pri govoru. Proveri glas u podešavanjima TTS-a.")
+                              return@post
+                          }
+                      } else {
+                          errCount = 0
+                      }
+                      ReaderState.index = idx + 1
+                      ReaderState.savePos(this)
+                      if (ReaderState.index >= ReaderState.chunks.size) {
+                          finishBook()
+                      } else {
+                          ReaderState.changed()
+                          updateNotification()
+                          speakCurrent()
+                      }
+                  }
+              }
+
+              private fun applyLanguage(): Boolean {
+                  val t = tts ?: return false
+                  val mode = ReaderState.langMode
+                  val lang = if (mode == "auto") ReaderState.detected else mode
+                  if (lang == lastLang) return true
+                  val candidates: List<Locale> = when (lang) {
+                      "en" -> listOf(Locale.US, Locale.UK, Locale.ENGLISH)
+                      "hr" -> listOf(Locale("hr", "HR"), Locale("hr"), Locale("bs", "BA"))
+                      else -> listOf(Locale("sr", "RS"), Locale("sr"), Locale("hr", "HR"), Locale("bs", "BA"))
+                  }
+                  for (loc in candidates) {
+                      val r = t.setLanguage(loc)
+                      if (r >= TextToSpeech.LANG_AVAILABLE) {
+                          lastLang = lang
+                          translit = loc.language != "sr" && loc.language != "en"
+                          val fallback = lang == "sr" && loc.language != "sr"
+                          ReaderState.voiceInfo = "Glas: " + loc.toLanguageTag() + (if (fallback) " (zamena)" else "")
+                          return true
+                      }
+                  }
+                  ReaderState.error = "Na telefonu nema glasa za taj jezik. Otvori „Glasovi“ i instaliraj Google Speech Services pa skini glas."
+                  return false
+              }
+
+              private fun speakCurrent() {
+                  val t = tts ?: return
+                  if (!wantPlay || !ttsReady) return
+                  val chunks = ReaderState.chunks
+                  val i = ReaderState.index
+                  if (i < 0 || i >= chunks.size) {
+                      finishBook()
+                      return
+                  }
+                  if (!applyLanguage()) {
+                      failPlayback(ReaderState.error ?: "Nema glasa.")
+                      return
+                  }
+                  acquireWake()
+                  t.setSpeechRate(ReaderState.rate)
+                  gen++
+                  var text = chunks[i]
+                  if (translit) text = TextUtil.cyrillicToLatin(text)
+                  val r = t.speak(text, TextToSpeech.QUEUE_FLUSH, null, "$gen:$i")
+                  if (r == TextToSpeech.ERROR) {
+                      errCount++
+                      if (errCount >= 3) {
+                          failPlayback("TTS ne odgovara. Pokušaj ponovo.")
+                      } else {
+                          main.postDelayed({ speakCurrent() }, 700)
+                      }
+                      return
+                  }
+                  ReaderState.changed()
+                  updateNotification()
+              }
+
+              // ---------- komande ----------
+
+              private fun play() {
+                  if (ReaderState.chunks.isEmpty()) {
+                      stopAll()
+                      return
+                  }
+                  if (ReaderState.index >= ReaderState.chunks.size) ReaderState.index = 0
+                  wantPlay = true
+                  ReaderState.playing = true
+                  ReaderState.error = null
+                  errCount = 0
+                  resumeOnFocus = false
+                  requestFocus()
+                  acquireWake()
+                  goForeground()
+                  updateSession()
+                  ReaderState.changed()
+                  if (ttsReady) speakCurrent()
+              }
+
+              private fun pause(keepFocus: Boolean = false) {
+                  wantPlay = false
+                  ReaderState.playing = false
+                  gen++
+                  tts?.stop()
+                  releaseWake()
+                  if (!keepFocus) abandonFocus()
+                  ReaderState.savePos(this)
+                  updateSession()
+                  updateNotification()
+                  ReaderState.changed()
+              }
+
+              private fun seekTo(i: Int) {
+                  val n = ReaderState.chunks.size
+                  if (n == 0) return
+                  ReaderState.index = i.coerceIn(0, n - 1)
+                  ReaderState.savePos(this)
+                  ReaderState.changed()
+                  if (wantPlay && ttsReady) speakCurrent() else updateNotification()
+              }
+
+              private fun finishBook() {
+                  ReaderState.index = 0
+                  ReaderState.savePos(this)
+                  stopAll()
+              }
+
+              private fun failPlayback(msg: String) {
+                  ReaderState.error = msg
+                  pause()
+              }
+
+              private fun stopAll() {
+                  pause()
+                  if (isForeground) {
+                      stopForeground(STOP_FOREGROUND_REMOVE)
+                      isForeground = false
+                  }
+                  stopSelf()
+              }
+
+              // ---------- audio fokus, wake lock ----------
+
+              private fun requestFocus() {
+                  val am = getSystemService(AudioManager::class.java) ?: return
+                  val req = focusRequest ?: AudioFocusRequest.Builder(AudioManager.AUDIOFOCUS_GAIN)
+                      .setAudioAttributes(
+                          AudioAttributes.Builder()
+                              .setUsage(AudioAttributes.USAGE_MEDIA)
+                              .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
+                              .build()
+                      )
+                      .setOnAudioFocusChangeListener { change -> main.post { onFocus(change) } }
+                      .build()
+                      .also { focusRequest = it }
+                  am.requestAudioFocus(req)
+              }
+
+              private fun abandonFocus() {
+                  val req = focusRequest ?: return
+                  getSystemService(AudioManager::class.java)?.abandonAudioFocusRequest(req)
+              }
+
+              private fun onFocus(change: Int) {
+                  when (change) {
+                      AudioManager.AUDIOFOCUS_LOSS -> {
+                          resumeOnFocus = false
+                          pause()
+                      }
+                      AudioManager.AUDIOFOCUS_LOSS_TRANSIENT -> {
+                          if (wantPlay) {
+                              resumeOnFocus = true
+                              pause(true)
+                          }
+                      }
+                      AudioManager.AUDIOFOCUS_GAIN -> {
+                          if (resumeOnFocus) {
+                              resumeOnFocus = false
+                              play()
+                          }
+                      }
+                  }
+              }
+
+              private fun acquireWake() {
+                  if (wakeLock == null) {
+                      val pm = getSystemService(PowerManager::class.java)
+                      wakeLock = pm?.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "bookreader:tts")
+                  }
+                  val wl = wakeLock ?: return
+                  if (!wl.isHeld) wl.acquire(6 * 60 * 60 * 1000L)
+              }
+
+              private fun releaseWake() {
+                  val wl = wakeLock ?: return
+                  if (wl.isHeld) wl.release()
+              }
+
+              // ---------- notifikacija i media session ----------
+
+              private fun createChannel() {
+                  val nm = getSystemService(NotificationManager::class.java)
+                  val ch = NotificationChannel(CHANNEL, "Čitanje knjige", NotificationManager.IMPORTANCE_LOW)
+                  ch.lockscreenVisibility = Notification.VISIBILITY_PUBLIC
+                  ch.setShowBadge(false)
+                  nm.createNotificationChannel(ch)
+              }
+
+              private fun goForeground() {
+                  startForeground(NOTIF_ID, buildNotification(), ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PLAYBACK)
+                  isForeground = true
+              }
+
+              private fun updateNotification() {
+                  if (!isForeground) return
+                  getSystemService(NotificationManager::class.java).notify(NOTIF_ID, buildNotification())
+              }
+
+              private fun updateSession() {
+                  val s = session ?: return
+                  val playing = ReaderState.playing
+                  s.setPlaybackState(
+                      PlaybackState.Builder()
+                          .setActions(
+                              PlaybackState.ACTION_PLAY or PlaybackState.ACTION_PAUSE or
+                                  PlaybackState.ACTION_PLAY_PAUSE or PlaybackState.ACTION_SKIP_TO_NEXT or
+                                  PlaybackState.ACTION_SKIP_TO_PREVIOUS or PlaybackState.ACTION_STOP
+                          )
+                          .setState(
+                              if (playing) PlaybackState.STATE_PLAYING else PlaybackState.STATE_PAUSED,
+                              ReaderState.index.toLong(),
+                              if (playing) 1f else 0f
+                          )
+                          .build()
+                  )
+                  s.setMetadata(
+                      MediaMetadata.Builder()
+                          .putString(MediaMetadata.METADATA_KEY_TITLE, ReaderState.title)
+                          .build()
+                  )
+              }
+
+              private fun serviceAction(icon: Int, label: String, action: String, req: Int): Notification.Action {
+                  val pi = PendingIntent.getService(
+                      this, req,
+                      Intent(this, ReaderService::class.java).setAction(action),
+                      PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
+                  )
+                  return Notification.Action.Builder(Icon.createWithResource(this, icon), label, pi).build()
+              }
+
+              private fun buildNotification(): Notification {
+                  val playing = ReaderState.playing
+                  val open = PendingIntent.getActivity(
+                      this, 0,
+                      Intent(this, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP),
+                      PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
+                  )
+                  val snippet = ReaderState.chunks.getOrNull(ReaderState.index) ?: ""
+                  val b = Notification.Builder(this, CHANNEL)
+                      .setSmallIcon(android.R.drawable.ic_media_play)
+                      .setContentTitle(if (ReaderState.title.isEmpty()) "Čitač knjiga" else ReaderState.title)
+                      .setContentText(snippet.take(80))
+                      .setContentIntent(open)
+                      .setVisibility(Notification.VISIBILITY_PUBLIC)
+                      .setOngoing(playing)
+                      .setOnlyAlertOnce(true)
+                      .addAction(serviceAction(android.R.drawable.ic_media_previous, "Nazad", ACTION_PREV, 1))
+                      .addAction(
+                          if (playing) serviceAction(android.R.drawable.ic_media_pause, "Pauza", ACTION_PAUSE, 2)
+                          else serviceAction(android.R.drawable.ic_media_play, "Pusti", ACTION_PLAY, 2)
+                      )
+                      .addAction(serviceAction(android.R.drawable.ic_media_next, "Napred", ACTION_NEXT, 3))
+                      .addAction(serviceAction(android.R.drawable.ic_menu_close_clear_cancel, "Zatvori", ACTION_STOP, 4))
+                  val s = session
+                  if (s != null) {
+                      b.setStyle(
+                          Notification.MediaStyle()
+                              .setMediaSession(s.sessionToken)
+                              .setShowActionsInCompactView(0, 1, 2)
+                      )
+                  }
+                  return b.build()
+              }
+          }
+          EOF_9E0C0C5F
+          mkdir -p 'app/src/main/java/com/example/bookreader'
+          cat > 'app/src/main/java/com/example/bookreader/ReaderState.kt' <<'EOF_9530BB21'
+          package com.example.bookreader
+
+          import android.content.Context
+          import android.os.Handler
+          import android.os.Looper
+          import java.util.concurrent.CopyOnWriteArrayList
+
+          /** Stanje koje dele aktivnost i servis (isti proces). */
+          object ReaderState {
+              @Volatile var chunks: List<String> = emptyList()
+              @Volatile var index: Int = 0
+              @Volatile var playing: Boolean = false
+              @Volatile var title: String = ""
+              @Volatile var docKey: String = ""
+
+              /** "auto", "en", "sr" ili "hr" (srpski preko hrvatskog glasa) */
+              @Volatile var langMode: String = "auto"
+              @Volatile var detected: String = "en"
+              @Volatile var rate: Float = 1.0f
+              @Volatile var voiceInfo: String = ""
+              @Volatile var error: String? = null
+
+              private val main = Handler(Looper.getMainLooper())
+              private val listeners = CopyOnWriteArrayList<() -> Unit>()
+
+              fun addListener(l: () -> Unit) {
+                  listeners.add(l)
+              }
+
+              fun removeListener(l: () -> Unit) {
+                  listeners.remove(l)
+              }
+
+              fun changed() {
+                  main.post {
+                      for (l in listeners) l()
+                  }
+              }
+
+              fun savePos(ctx: Context) {
+                  if (docKey.isEmpty()) return
+                  ctx.getSharedPreferences("reader", Context.MODE_PRIVATE)
+                      .edit()
+                      .putInt("pos_$docKey", index)
+                      .apply()
+              }
+          }
+          EOF_9530BB21
+          mkdir -p 'app/src/main/java/com/example/bookreader'
+          cat > 'app/src/main/java/com/example/bookreader/TextUtil.kt' <<'EOF_F9F15183'
+          package com.example.bookreader
+
+          import java.text.BreakIterator
+          import java.util.Locale
+
+          object TextUtil {
+
+              // ---------- ćirilica -> latinica ----------
+
+              private val cyrMap: Map<Char, String> by lazy {
+                  val up = mapOf(
+                      'А' to "A", 'Б' to "B", 'В' to "V", 'Г' to "G", 'Д' to "D", 'Ђ' to "Đ", 'Е' to "E",
+                      'Ж' to "Ž", 'З' to "Z", 'И' to "I", 'Ј' to "J", 'К' to "K", 'Л' to "L", 'Љ' to "Lj",
+                      'М' to "M", 'Н' to "N", 'Њ' to "Nj", 'О' to "O", 'П' to "P", 'Р' to "R", 'С' to "S",
+                      'Т' to "T", 'Ћ' to "Ć", 'У' to "U", 'Ф' to "F", 'Х' to "H", 'Ц' to "C", 'Ч' to "Č",
+                      'Џ' to "Dž", 'Ш' to "Š"
+                  )
+                  val m = HashMap<Char, String>()
+                  for ((k, v) in up) {
+                      m[k] = v
+                      m[k.lowercaseChar()] = v.lowercase()
+                  }
+                  m
+              }
+
+              fun cyrillicToLatin(s: String): String {
+                  val sb = StringBuilder(s.length + 16)
+                  for (c in s) {
+                      val r = cyrMap[c]
+                      if (r != null) sb.append(r) else sb.append(c)
+                  }
+                  return sb.toString()
+              }
+
+              // ---------- prepoznavanje jezika ----------
+
+              private val EN = setOf(
+                  "the", "and", "of", "in", "is", "that", "it", "was", "for", "with", "as", "he", "she",
+                  "his", "her", "you", "had", "not", "but", "this", "they", "have", "from", "which", "were"
+              )
+              private val SR = setOf(
+                  "je", "se", "da", "su", "na", "za", "sam", "nije", "ali", "od", "što", "sto", "kako",
+                  "ili", "bio", "bila", "ovo", "ono", "koji", "kao", "će", "ce", "mi", "ga", "li", "po",
+                  "sve", "još", "jos", "samo", "bi", "ću", "cu", "ima", "su", "tako", "kad", "kada"
+              )
+
+              /** Vraća "sr" ili "en". */
+              fun detectLang(text: String): String {
+                  val s = text.take(8000)
+                  var cyr = 0
+                  var diac = 0
+                  for (c in s) {
+                      if (c in 'Ѐ'..'ӿ') cyr++
+                      else if ("čćšžđČĆŠŽĐ".indexOf(c) >= 0) diac++
+                  }
+                  if (cyr > 30) return "sr"
+                  if (diac > 5) return "sr"
+                  var en = 0
+                  var sr = 0
+                  for (w in s.lowercase().split(Regex("[^\\p{L}]+"))) {
+                      if (w in EN) en++ else if (w in SR) sr++
+                  }
+                  return if (sr > en) "sr" else "en"
+              }
+
+              // ---------- čišćenje i deljenje na delove ----------
+
+              fun clean(raw: String): String {
+                  var t = raw.replace("\r\n", "\n").replace('\r', '\n').replace(' ', ' ')
+                  // spojene reči sa crticom na kraju reda
+                  t = t.replace(Regex("(\\p{L})-\\n(\\p{Ll})"), "$1$2")
+                  // jedan novi red usred rečenice -> razmak
+                  t = t.replace(Regex("""(?<![.!?…:;"”»)\n])\n(?!\n)"""), " ")
+                  t = t.replace(Regex("[ \\t]+"), " ")
+                  t = t.replace(Regex(" ?\\n ?"), "\n")
+                  t = t.replace(Regex("\\n{3,}"), "\n\n")
+                  return t.trim()
+              }
+
+              fun chunk(text: String, target: Int = 350, max: Int = 1200): List<String> {
+                  val out = ArrayList<String>()
+                  val buf = StringBuilder()
+                  val bi = BreakIterator.getSentenceInstance(Locale.ENGLISH)
+
+                  fun flush() {
+                      val s = buf.toString().trim()
+                      if (s.isNotEmpty()) out.add(s)
+                      buf.setLength(0)
+                  }
+
+                  for (p in text.split("\n")) {
+                      val para = p.trim()
+                      if (para.isEmpty()) continue
+                      bi.setText(para)
+                      var start = bi.first()
+                      var end = bi.next()
+                      while (end != BreakIterator.DONE) {
+                          val sent = para.substring(start, end).trim()
+                          start = end
+                          end = bi.next()
+                          if (sent.isEmpty()) continue
+                          if (sent.length > max) {
+                              flush()
+                              for (part in splitLong(sent, max)) out.add(part)
+                              continue
+                          }
+                          if (buf.isNotEmpty() && buf.length + sent.length + 1 > target) flush()
+                          if (buf.isNotEmpty()) buf.append(' ')
+                          buf.append(sent)
+                      }
+                      flush()
+                  }
+                  return out
+              }
+
+              private fun splitLong(s: String, max: Int): List<String> {
+                  val res = ArrayList<String>()
+                  var rest = s
+                  while (rest.length > max) {
+                      var cut = rest.lastIndexOf(' ', max)
+                      if (cut < max / 2) cut = max
+                      res.add(rest.substring(0, cut).trim())
+                      rest = rest.substring(cut).trim()
+                  }
+                  if (rest.isNotEmpty()) res.add(rest)
+                  return res
+              }
+          }
+          EOF_F9F15183
+          mkdir -p 'app/src/main/res/drawable'
+          cat > 'app/src/main/res/drawable/ic_launcher.xml' <<'EOF_25650CE2'
+          <?xml version="1.0" encoding="utf-8"?>
+          <vector xmlns:android="http://schemas.android.com/apk/res/android"
+              android:width="108dp"
+              android:height="108dp"
+              android:viewportWidth="108"
+              android:viewportHeight="108">
+              <path
+                  android:fillColor="#1565C0"
+                  android:pathData="M0,0h108v108h-108z" />
+              <path
+                  android:fillColor="#FFFFFF"
+                  android:pathData="M24,34h26a4,4 0 0 1 4,4v36a4,4 0 0 0 -4,-4h-26z" />
+              <path
+                  android:fillColor="#FFFFFF"
+                  android:pathData="M84,34h-26a4,4 0 0 0 -4,4v36a4,4 0 0 1 4,-4h26z" />
+          </vector>
+          EOF_25650CE2
+          mkdir -p 'app/src/main/res/values'
+          cat > 'app/src/main/res/values/strings.xml' <<'EOF_01DAFB3F'
+          <?xml version="1.0" encoding="utf-8"?>
+          <resources>
+              <string name="app_name">Čitač knjiga</string>
+          </resources>
+          EOF_01DAFB3F
+
+      - name: Install Android SDK pieces
+        run: |
+          SDKM=$(command -v sdkmanager || ls $ANDROID_HOME/cmdline-tools/*/bin/sdkmanager | head -1)
+          yes | $SDKM --licenses > /dev/null || true
+          $SDKM "platforms;android-34" "build-tools;34.0.0" > /dev/null
+
+      - name: Build debug APK
+        run: gradle assembleDebug --no-daemon --stacktrace
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: BookReader-APK
+          path: app/build/outputs/apk/debug/app-debug.apk
